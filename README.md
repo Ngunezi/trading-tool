@@ -81,7 +81,7 @@ pip install SQLAlchemy pyodbc
 export DATABASE_URL='mssql+pyodbc://USERNAME:PASSWORD@SERVER.database.windows.net:1433/DATABASE?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes&TrustServerCertificate=no'
 
 # Local SQL Server example
-export DATABASE_URL='mssql+pyodbc://sa:SQLConnect1%21@localhost:1433/master?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=no&TrustServerCertificate=yes'
+export DATABASE_URL='mssql+pyodbc://sa:<PASSWORD>@localhost:1433/master?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=no&TrustServerCertificate=yes'
 ```
 
 3) Start the app:
