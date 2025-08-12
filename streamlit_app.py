@@ -65,10 +65,10 @@ def load_trades() -> pd.DataFrame:
     with sqlite3.connect(get_db_path()) as conn:
         df = pd.read_sql_query(
             """
-            SELECT date, symbol, type, profit, loss, fees, notes
+            SELECT id, date, symbol, type, profit, loss, fees, notes
             FROM trades
             WHERE symbol = ?
-            ORDER BY date, symbol
+            ORDER BY date, id
             """,
             conn,
             params=("BTCUSD",),
@@ -77,7 +77,7 @@ def load_trades() -> pd.DataFrame:
     if df.empty:
         # Ensure expected columns exist even when empty
         df = pd.DataFrame(
-            columns=["date", "symbol", "type", "profit", "loss", "fees", "notes"]
+            columns=["id", "date", "symbol", "type", "profit", "loss", "fees", "notes"]
         )
 
     # Parse dates; coerce malformed to NaT
@@ -103,6 +103,7 @@ def load_trades() -> pd.DataFrame:
     else:
         df = pd.DataFrame(
             columns=[
+                "id",
                 "date",
                 "symbol",
                 "type",
@@ -307,6 +308,20 @@ def append_trade(
         conn.commit()
 
 
+def delete_trades(trade_ids: list[int]) -> int:
+    if not trade_ids:
+        return 0
+    placeholders = ",".join(["?"] * len(trade_ids))
+    query = f"DELETE FROM trades WHERE id IN ({placeholders})"
+    with sqlite3.connect(get_db_path()) as conn:
+        cursor = conn.execute(query, [int(tid) for tid in trade_ids])
+        conn.commit()
+        try:
+            return int(cursor.rowcount)
+        except Exception:
+            return 0
+
+
 def render_kpi_tiles(metrics: Metrics) -> None:
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -391,11 +406,43 @@ def main() -> None:
 
     st.subheader("Ledger")
     # Display a clean table view (without helper columns)
-    display_cols = ["date", "symbol", "type", "profit", "loss", "fees", "notes", "pnl"]
+    display_cols = ["id", "date", "symbol", "type", "profit", "loss", "fees", "notes", "pnl"]
     display_df = df.copy()
     if not display_df.empty and "date" in display_df.columns:
         display_df["date"] = display_df["date"].dt.strftime("%Y-%m-%d")
     st.dataframe(display_df[display_cols] if not display_df.empty else display_df)
+
+    st.subheader("Manage entries")
+    if df.empty:
+        st.info("No entries to manage.")
+    else:
+        # Build friendly labels for selection
+        label_map = {}
+        for _, row in df.iterrows():
+            date_str = row["date"].strftime("%Y-%m-%d") if pd.notna(row["date"]) else "N/A"
+            pnl_val = float(row.get("pnl", 0.0))
+            notes_preview = str(row.get("notes", "") or "")
+            if len(notes_preview) > 24:
+                notes_preview = notes_preview[:24] + "…"
+            label_map[int(row["id"])] = f"#{int(row['id'])} | {date_str} | {row['type']} | PnL ${pnl_val:,.2f} | {notes_preview}"
+
+        selected_ids = st.multiselect(
+            "Select entries to delete",
+            options=[int(x) for x in df["id"].tolist()],
+            format_func=lambda tid: label_map.get(int(tid), str(tid)),
+            key="delete_multiselect",
+        )
+
+        confirm = st.checkbox("Confirm deletion of selected entries", key="delete_confirm")
+        if st.button("Delete selected", key="delete_button"):
+            if not selected_ids:
+                st.info("No entries selected.")
+            elif not confirm:
+                st.warning("Please check the confirmation box before deleting.")
+            else:
+                removed = delete_trades(selected_ids)
+                st.success(f"Deleted {removed} entr{'y' if removed == 1 else 'ies'}.")
+                st.rerun()
 
 
 if __name__ == "__main__":
