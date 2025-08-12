@@ -48,17 +48,12 @@ This will open the app in your browser (by default at `http://localhost:8501`).
 
 - Set your **Start balance** and **Target equity** in the sidebar.
 - Use the **Add Trade** form to record each trade. Validation enforces that exactly one of Profit or Loss is > 0 and Fees default to 0.
-- The ledger is stored in `trades.csv` (append-only). After each addition the file is sorted by date.
+- The ledger is now stored in a local SQLite database `trades.db` (no CSV required).
 - Charts and `weekly_summary.csv` are written to the project root on each run.
 
 ### Data model
 
-`trades.csv` columns:
-
-```
-date,symbol,type,profit,loss,fees,notes
-```
-
+Database table `trades` columns: `id`, `date`, `symbol`, `type`, `profit`, `loss`, `fees`, `notes`.
 Derived columns used in the app: `pnl`, `is_win`, `is_loss`.
 
 ### Notes

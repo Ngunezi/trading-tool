@@ -9,9 +9,10 @@ from typing import Optional, Tuple
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
+import sqlite3
 
 
-LEDGER_FILENAME = "trades.csv"
+DB_FILENAME = "trades.db"
 WEEKLY_SUMMARY_FILENAME = "weekly_summary.csv"
 EQUITY_CURVE_PNG = "equity_curve.png"
 WEEKLY_PNL_PNG = "weekly_pnl.png"
@@ -35,35 +36,43 @@ def get_project_root() -> Path:
     return Path(__file__).resolve().parent
 
 
-def get_ledger_path() -> Path:
-    return get_project_root() / LEDGER_FILENAME
+def get_db_path() -> Path:
+    return get_project_root() / DB_FILENAME
 
 
-def ensure_ledger_exists() -> None:
-    ledger_path = get_ledger_path()
-    if not ledger_path.exists():
-        ledger_path.write_text(
-            "date,symbol,type,profit,loss,fees,notes\n", encoding="utf-8"
+def ensure_db() -> None:
+    db_path = get_db_path()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                type TEXT NOT NULL,
+                profit REAL NOT NULL DEFAULT 0,
+                loss REAL NOT NULL DEFAULT 0,
+                fees REAL NOT NULL DEFAULT 0,
+                notes TEXT
+            )
+            """
         )
+        conn.commit()
 
 
 def load_trades() -> pd.DataFrame:
-    ensure_ledger_exists()
-    ledger_path = get_ledger_path()
-    if ledger_path.stat().st_size == 0:
-        # Empty file safety: create headers
-        ledger_path.write_text(
-            "date,symbol,type,profit,loss,fees,notes\n", encoding="utf-8"
+    ensure_db()
+    with sqlite3.connect(get_db_path()) as conn:
+        df = pd.read_sql_query(
+            """
+            SELECT date, symbol, type, profit, loss, fees, notes
+            FROM trades
+            WHERE symbol = ?
+            ORDER BY date, symbol
+            """,
+            conn,
+            params=("BTCUSD",),
         )
-
-    df = pd.read_csv(
-        ledger_path,
-        dtype={
-            "symbol": "string",
-            "type": "string",
-            "notes": "string",
-        },
-    )
 
     if df.empty:
         # Ensure expected columns exist even when empty
@@ -81,10 +90,6 @@ def load_trades() -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
         else:
             df[col] = 0.0
-
-    # Filter for BTCUSD only as per plan
-    if "symbol" in df.columns:
-        df = df[df["symbol"].fillna("") == "BTCUSD"].copy()
 
     # Compute PnL related columns
     if not df.empty:
@@ -282,29 +287,24 @@ def append_trade(
     fees: float,
     notes: str,
 ) -> None:
-    ensure_ledger_exists()
-    ledger_path = get_ledger_path()
-
-    # Append the new trade
-    with ledger_path.open("a", encoding="utf-8") as f:
-        row = [
-            trade_date.isoformat(),
-            "BTCUSD",
-            trade_type,
-            f"{float(profit):.2f}",
-            f"{float(loss):.2f}",
-            f"{float(fees):.2f}",
-            (notes or "").replace("\n", " ").strip(),
-        ]
-        f.write(",".join(row) + "\n")
-
-    # Sort ledger by date after append
-    df = load_trades()
-    # Save sorted ledger preserving columns
-    save_columns = ["date", "symbol", "type", "profit", "loss", "fees", "notes"]
-    df_to_save = df[save_columns].copy()
-    df_to_save["date"] = df_to_save["date"].dt.strftime("%Y-%m-%dT%H:%M:%S")
-    df_to_save.to_csv(ledger_path, index=False)
+    ensure_db()
+    with sqlite3.connect(get_db_path()) as conn:
+        conn.execute(
+            """
+            INSERT INTO trades (date, symbol, type, profit, loss, fees, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trade_date.isoformat(),
+                "BTCUSD",
+                trade_type,
+                float(profit),
+                float(loss),
+                float(fees or 0.0),
+                (notes or "").replace("\n", " ").strip(),
+            ),
+        )
+        conn.commit()
 
 
 def render_kpi_tiles(metrics: Metrics) -> None:
