@@ -49,6 +49,7 @@ This will open the app in your browser (by default at `http://localhost:8501`).
 - Set your **Start balance** and **Target equity** in the sidebar.
 - Use the **Add Trade** form to record each trade. Validation enforces that exactly one of Profit or Loss is > 0 and Fees default to 0.
 - The ledger is now stored in a local SQLite database `trades.db` (no CSV required).
+ - You can also point the app to Azure SQL or local SQL Server via a `DATABASE_URL` env var.
 - Charts and `weekly_summary.csv` are written to the project root on each run.
 
 ### Data model
@@ -66,5 +67,26 @@ Derived columns used in the app: `pnl`, `is_win`, `is_loss`.
 
 - If Streamlit says a port is in use, run: `streamlit run streamlit_app.py --server.port 8502`
 - If you see missing module errors, re-run dependency install: `pip install -r requirements.txt`
+
+### Connect to Azure SQL / Local SQL Server
+
+1) Install drivers and deps:
+```bash
+pip install SQLAlchemy pyodbc
+```
+
+2) Set the env var before starting the app:
+```bash
+# Azure SQL example
+export DATABASE_URL='mssql+pyodbc://USERNAME:PASSWORD@SERVER.database.windows.net:1433/DATABASE?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes&TrustServerCertificate=no'
+
+# Local SQL Server example
+export DATABASE_URL='mssql+pyodbc://sa:SQLConnect1%21@localhost:1433/master?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=no&TrustServerCertificate=yes'
+```
+
+3) Start the app:
+```bash
+streamlit run streamlit_app.py
+```
 
 

@@ -4,12 +4,15 @@ import math
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+import os
 from typing import Optional, Tuple
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 import sqlite3
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
 
 DB_FILENAME = "trades.db"
@@ -40,38 +43,73 @@ def get_db_path() -> Path:
     return get_project_root() / DB_FILENAME
 
 
+def get_engine() -> Engine:
+    url = os.getenv("DATABASE_URL")
+    if url:
+        return create_engine(url, pool_pre_ping=True)
+    # Fallback to SQLite
+    return create_engine(f"sqlite:///{get_db_path()}", future=True)
+
+
 def ensure_db() -> None:
-    db_path = get_db_path()
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                type TEXT NOT NULL,
-                profit REAL NOT NULL DEFAULT 0,
-                loss REAL NOT NULL DEFAULT 0,
-                fees REAL NOT NULL DEFAULT 0,
-                notes TEXT
+    engine = get_engine()
+    # Try a generic create that works on SQLite, and ignore errors on Azure SQL if exists
+    with engine.begin() as conn:
+        try:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS trades (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date TEXT NOT NULL,
+                        symbol TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        profit REAL NOT NULL DEFAULT 0,
+                        loss REAL NOT NULL DEFAULT 0,
+                        fees REAL NOT NULL DEFAULT 0,
+                        notes TEXT
+                    )
+                    """
+                )
             )
-            """
-        )
-        conn.commit()
+        except Exception:
+            # Azure SQL path: create if missing using T-SQL (no-op if exists)
+            conn.execute(
+                text(
+                    """
+                    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='trades')
+                    BEGIN
+                      CREATE TABLE trades (
+                        id INT IDENTITY(1,1) PRIMARY KEY,
+                        date DATETIME2 NOT NULL,
+                        symbol NVARCHAR(20) NOT NULL,
+                        type NVARCHAR(10) NOT NULL,
+                        profit DECIMAL(19,4) NOT NULL DEFAULT 0,
+                        loss   DECIMAL(19,4) NOT NULL DEFAULT 0,
+                        fees   DECIMAL(19,4) NOT NULL DEFAULT 0,
+                        notes  NVARCHAR(4000) NULL
+                      )
+                    END
+                    """
+                )
+            )
 
 
 def load_trades() -> pd.DataFrame:
     ensure_db()
-    with sqlite3.connect(get_db_path()) as conn:
+    engine = get_engine()
+    with engine.connect() as conn:
         df = pd.read_sql_query(
-            """
-            SELECT id, date, symbol, type, profit, loss, fees, notes
-            FROM trades
-            WHERE symbol = ?
-            ORDER BY date, id
-            """,
+            text(
+                """
+                SELECT id, date, symbol, type, profit, loss, fees, notes
+                FROM trades
+                WHERE symbol = :symbol
+                ORDER BY date, id
+                """
+            ),
             conn,
-            params=("BTCUSD",),
+            params={"symbol": "BTCUSD"},
         )
 
     if df.empty:
@@ -289,37 +327,37 @@ def append_trade(
     notes: str,
 ) -> None:
     ensure_db()
-    with sqlite3.connect(get_db_path()) as conn:
+    engine = get_engine()
+    with engine.begin() as conn:
         conn.execute(
-            """
-            INSERT INTO trades (date, symbol, type, profit, loss, fees, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                trade_date.isoformat(),
-                "BTCUSD",
-                trade_type,
-                float(profit),
-                float(loss),
-                float(fees or 0.0),
-                (notes or "").replace("\n", " ").strip(),
+            text(
+                """
+                INSERT INTO trades (date, symbol, type, profit, loss, fees, notes)
+                VALUES (:date, :symbol, :type, :profit, :loss, :fees, :notes)
+                """
             ),
+            {
+                "date": trade_date.isoformat(),
+                "symbol": "BTCUSD",
+                "type": trade_type,
+                "profit": float(profit),
+                "loss": float(loss),
+                "fees": float(fees or 0.0),
+                "notes": (notes or "").replace("\n", " ").strip(),
+            },
         )
-        conn.commit()
 
 
 def delete_trades(trade_ids: list[int]) -> int:
     if not trade_ids:
         return 0
-    placeholders = ",".join(["?"] * len(trade_ids))
-    query = f"DELETE FROM trades WHERE id IN ({placeholders})"
-    with sqlite3.connect(get_db_path()) as conn:
-        cursor = conn.execute(query, [int(tid) for tid in trade_ids])
-        conn.commit()
-        try:
-            return int(cursor.rowcount)
-        except Exception:
-            return 0
+    engine = get_engine()
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("DELETE FROM trades WHERE id IN :ids"),
+            {"ids": tuple(int(tid) for tid in trade_ids)},
+        )
+        return int(result.rowcount or 0)
 
 
 def render_kpi_tiles(metrics: Metrics) -> None:
